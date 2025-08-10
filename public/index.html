@@ -16,6 +16,31 @@
     .panel{background:#f8f9fb;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-top:12px}
     .code{white-space:pre;overflow:auto}
     .muted{color:#666}
+      /* 既存のstyleの末尾に追記 */
+    .diagram-wrap{
+      background:#fff;
+      border:1px solid #e5e7eb;
+      border-radius:10px;
+      padding:12px;
+      /* 縦横どっちにもスクロールできるように */
+      overflow:auto;
+      /* 画面高の7割を確保して見やすく */
+      min-height:70vh;
+      max-height:80vh;
+    }
+    /* Mermaidが返すSVGを“幅固定にしない”＝潰れ防止 */
+    .diagram-wrap svg{
+      width: 100% !important;
+      height: auto !important;
+      max-width: none !important;
+    }
+    /* Zoom stage for pan & zoom */
+    #zoomStage{
+      --zoom: 1;
+      transform: scale(var(--zoom));
+      transform-origin: top left;
+      width: fit-content; /* allow horizontal growth when zoomed */
+    }
   </style>
 </head>
 <body>
@@ -33,9 +58,31 @@
   </div>
 
   <div id="result" class="panel" style="display:none">
-    <h3 style="margin:0 0 8px">Mermaid</h3>
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+      <h3 style="margin:0">Diagram</h3>
+      <div class="row" style="gap:8px">
+        <div>
+          <label><input type="radio" name="dir" value="TB" checked> TB</label>
+          <label><input type="radio" name="dir" value="LR"> LR</label>
+        </div>
+        <div>
+          <button id="zoomOutBtn" title="Zoom out">−</button>
+          <button id="zoomInBtn" title="Zoom in">＋</button>
+          <button id="zoomResetBtn" title="Reset zoom">100%</button>
+          <button id="zoomFitBtn" title="Fit width">Fit</button>
+        </div>
+      </div>
+    </div>
+  
+    <div class="diagram-wrap" id="diagramWrap">
+      <div id="zoomStage">
+        <div id="mmdView" class="mermaid"></div>
+      </div>
+    </div>
+  
+    <h3 style="margin:16px 0 8px">Mermaid (raw)</h3>
     <div id="mmdRaw" class="code"></div>
-    <div id="mmdView" class="mermaid" style="margin-top:12px"></div>
+  
     <div id="extras" style="margin-top:12px"></div>
   </div>
 
@@ -63,13 +110,68 @@
   const mmdRaw = document.getElementById("mmdRaw");
   const mmdView = document.getElementById("mmdView");
   const extras = document.getElementById("extras");
+  const diagramWrap = document.getElementById("diagramWrap");
+  const zoomStage = document.getElementById("zoomStage");
+  const zoomInBtn = document.getElementById("zoomInBtn");
+  const zoomOutBtn = document.getElementById("zoomOutBtn");
+  const zoomResetBtn = document.getElementById("zoomResetBtn");
+  const zoomFitBtn = document.getElementById("zoomFitBtn");
+  let zoom = 1;
+  function applyZoom() {
+    zoomStage.style.setProperty("--zoom", String(zoom));
+  }
+  function setZoom(z){
+    zoom = Math.max(0.25, Math.min(4, z));
+    applyZoom();
+  }
+  function fitWidth(){
+    const svg = zoomStage.querySelector("svg");
+    if(!svg) return;
+    const bbox = svg.getBBox();
+    const available = diagramWrap.clientWidth - 24; // padding slack
+    if (bbox.width > 0) {
+      setZoom(Math.max(0.25, Math.min(3, available / bbox.width)));
+    }
+  }
+  zoomInBtn.onclick = ()=>setZoom(zoom*1.2);
+  zoomOutBtn.onclick = ()=>setZoom(zoom/1.2);
+  zoomResetBtn.onclick = ()=>setZoom(1);
+  zoomFitBtn.onclick = ()=>fitWidth();
 
   function getMode(){ return document.querySelector('input[name="mode"]:checked').value; }
+  function getDir(){ return document.querySelector('input[name="dir"]:checked').value; }
   document.querySelectorAll('input[name="mode"]').forEach(r=>{
     r.addEventListener('change',()=>{ modePill.textContent = getMode()==="docs" ? "Docs+LLM" : "Rule"; });
   });
 
-  function esc(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  // 方向切替が押されたら即再レンダリング（最新のMermaid文字列がある時だけ）
+  document.querySelectorAll('input[name="dir"]').forEach(r=>{
+    r.addEventListener('change', async ()=>{
+      const src = mmdRaw.textContent.trim();
+      if(!src) return;
+      await renderMermaid(src);
+    });
+  });
+
+  // 1行目の flowchart XXX を差し替える
+  function withDirection(src, dir){
+    return src.replace(/^(flowchart\s+)(TB|LR)/i, (_, p1) => p1 + dir);
+  }
+
+  async function renderMermaid(mermaidSrc){
+    const dir = getDir();
+    const adjusted = withDirection(mermaidSrc, dir);
+    try {
+      const { svg, bindFunctions } = await mermaid.render("mmd-" + Date.now(), adjusted);
+      mmdView.innerHTML = svg;
+      if (bindFunctions) bindFunctions(mmdView);
+      // After render, auto-fit once (keeps previous zoom if already adjusted)
+      if (zoom === 1) fitWidth();
+    } catch (err) {
+      console.error("Mermaid render error:", err);
+      mmdView.textContent = adjusted; // フォールバック
+    }
+  }
 
   runBtn.addEventListener("click", async ()=>{
     const prompt = promptEl.value.trim() || "中規模Web、可用性高、WAFあり、DBはPaaS、Hub-Spoke、社内とVPN、東日本";
@@ -88,19 +190,10 @@
 
       result.style.display = "block";
       mmdRaw.textContent = data.mermaid;
-      try {
-        // 一意のIDを付けてレンダリング
-        const { svg, bindFunctions } = await mermaid.render(
-          "mmd-" + Date.now(),
-          data.mermaid
-        );
-        mmdView.innerHTML = svg;
-        if (bindFunctions) bindFunctions(mmdView);
-      } catch (err) {
-        console.error("Mermaid render error:", err);
-        // フォールバック：生テキストを表示
-        mmdView.textContent = data.mermaid;
-      }
+
+      await renderMermaid(data.mermaid); // ← ここだけ関数で描画
+      setZoom(1); fitWidth();
+
       statusEl.textContent = `Done (${data.mode})`;
 
       const bits = [];
