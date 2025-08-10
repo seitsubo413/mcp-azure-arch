@@ -7,6 +7,8 @@ import "dotenv/config";
 import { parsePrompt } from "./lib/parse.js";
 import { templateWebPaaS } from "./lib/templates.js";
 import { emitMermaid } from "./lib/emitMermaid.js";
+import { normalizeModel } from "./lib/normalize.js";
+
 
 // Docs＋LLM パイプライン（要ネット・要Azure OpenAI環境変数）
 import { searchDocs } from "./lib/docsClient.js";          // ← 使う場合は src/lib/docsClient.ts を用意
@@ -27,7 +29,38 @@ server.registerTool(
   },
   async ({ prompt }) => {
     const flags = parsePrompt(prompt);
-    const model = templateWebPaaS({ region: flags.region, vpn: flags.vpn, waf: flags.waf });
+
+    // まず雛形を生成（今まで通り）
+    let model = templateWebPaaS({
+      region: flags.region,
+      vpn: flags.vpn,
+      waf: flags.waf,
+      firewall: flags.firewall,
+      bastion: flags.bastion,
+      expressRouteReady: flags.expressRouteReady,
+      appServiceSku: flags.appServiceSku,
+      appInstances: flags.appInstances,
+      storageRedundancy: flags.storageRedundancy,
+      sqlTier: flags.sqlTier,
+      privateEndpointSql: flags.privateEndpointSql,
+      privateEndpointStorage: flags.privateEndpointStorage,
+      privateEndpointKeyVault: flags.privateEndpointKeyVault,
+    });
+    
+    // ↓ ここで不足補完・重複除去などの正規化
+    model = normalizeModel(model, {
+      enforceWaf: flags.waf,
+      enforceVpn: flags.vpn,
+      enforceFirewall: flags.firewall, 
+      enforceBastion: flags.bastion, 
+      enforcePE: {
+        sql: flags.privateEndpointSql,
+        storage: flags.privateEndpointStorage,
+        kv: flags.privateEndpointKeyVault,
+      },
+    });
+    
+    // 最終的にMermaid化
     const mermaid = emitMermaid(model);
     const notes = [
       `Region: ${model.region}`,
@@ -56,12 +89,23 @@ server.registerTool(
   },
   async ({ prompt }) => {
     try {
-      // Microsoft Docs（Learn）のMCPサーバにクエリ
       const docsSnippets = await searchDocs(prompt);
-
-      // LLM で中間JSON(モデル)を合成（要: AZURE_OPENAI_* 環境変数）
-      const model = await synthesizeModelFromPrompt(prompt, docsSnippets);
-
+      const modelRaw = await synthesizeModelFromPrompt(prompt, docsSnippets);
+    
+      const f = parsePrompt(prompt); // ← 追加
+    
+      const model = normalizeModel(modelRaw, {
+        enforceWaf: f.waf,
+        enforceVpn: f.vpn,
+        enforceFirewall: f.firewall,
+        enforceBastion: f.bastion,
+        enforcePE: {
+          sql: f.privateEndpointSql,
+          storage: f.privateEndpointStorage,
+          kv: f.privateEndpointKeyVault,
+        },
+      });
+    
       const mermaid = emitMermaid(model);
       return {
         content: [
@@ -69,10 +113,25 @@ server.registerTool(
           { type: "text", text: JSON.stringify({ model, notes: model.notes }, null, 2) }
         ],
       };
+    
     } catch (e: any) {
       // フォールバック（ネット/認証/整形失敗でもデモ継続する）
       const f = parsePrompt(prompt);
-      const fallback = templateWebPaaS({ region: f.region, vpn: f.vpn, waf: f.waf });
+      const fallback = templateWebPaaS({
+        region: f.region,
+        vpn: f.vpn,
+        waf: f.waf,
+        firewall: f.firewall,
+        bastion: f.bastion,
+        expressRouteReady: f.expressRouteReady,
+        appServiceSku: f.appServiceSku,
+        appInstances: f.appInstances,
+        storageRedundancy: f.storageRedundancy,
+        sqlTier: f.sqlTier,
+        privateEndpointSql: f.privateEndpointSql,
+        privateEndpointStorage: f.privateEndpointStorage,
+        privateEndpointKeyVault: f.privateEndpointKeyVault,
+      });
       const mermaid = emitMermaid(fallback);
       return {
         content: [

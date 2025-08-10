@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Azure Architecture Designer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <style>
+    body{font:14px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif;margin:24px;max-width:1100px;color:#1F1F1F}
+    h1{margin:0 0 12px}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    textarea{width:100%;height:120px;padding:10px;border-radius:8px;border:1px solid #e5e7eb}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #0078D4;background:#E5F1FB;cursor:pointer}
+    button:disabled{opacity:.6;cursor:default}
+    .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#F2F2F2;margin-left:8px}
+    .panel{background:#f8f9fb;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-top:12px}
+    .code{white-space:pre;overflow:auto}
+    .muted{color:#666}
+  </style>
+</head>
+<body>
+  <h1>Azure Architecture Designer <span id="modePill" class="pill">Rule</span></h1>
+  <div class="row">
+    <label><input type="radio" name="mode" value="rule" checked> Rule-based</label>
+    <label><input type="radio" name="mode" value="docs"> Docs + LLM</label>
+  </div>
+  <div class="panel">
+    <textarea id="prompt" placeholder="例）中規模Web、可用性高、WAFあり、DBはPaaS、Hub-Spoke、社内とVPN、東日本"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="runBtn">Generate</button>
+      <span id="status" class="muted"></span>
+    </div>
+  </div>
+
+  <div id="result" class="panel" style="display:none">
+    <h3 style="margin:0 0 8px">Mermaid</h3>
+    <div id="mmdRaw" class="code"></div>
+    <div id="mmdView" class="mermaid" style="margin-top:12px"></div>
+    <div id="extras" style="margin-top:12px"></div>
+  </div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: "base",
+    themeVariables: {
+      fontFamily: 'Segoe UI, system-ui, -apple-system, sans-serif',
+      primaryColor: '#E5F1FB',
+      primaryTextColor: '#1F1F1F',
+      primaryBorderColor: '#0078D4',
+      lineColor: '#0078D4',
+      secondaryColor: '#E6F4F1',
+      tertiaryColor: '#F2F2F2'
+    },
+    flowchart: { htmlLabels: true, curve: 'linear' }
+  });
+
+  const runBtn = document.getElementById("runBtn");
+  const promptEl = document.getElementById("prompt");
+  const statusEl = document.getElementById("status");
+  const modePill = document.getElementById("modePill");
+  const result = document.getElementById("result");
+  const mmdRaw = document.getElementById("mmdRaw");
+  const mmdView = document.getElementById("mmdView");
+  const extras = document.getElementById("extras");
+
+  function getMode(){ return document.querySelector('input[name="mode"]:checked').value; }
+  document.querySelectorAll('input[name="mode"]').forEach(r=>{
+    r.addEventListener('change',()=>{ modePill.textContent = getMode()==="docs" ? "Docs+LLM" : "Rule"; });
+  });
+
+  function esc(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  runBtn.addEventListener("click", async ()=>{
+    const prompt = promptEl.value.trim() || "中規模Web、可用性高、WAFあり、DBはPaaS、Hub-Spoke、社内とVPN、東日本";
+    const mode = getMode();
+    runBtn.disabled = true;
+    statusEl.textContent = "Generating...";
+    extras.innerHTML = "";
+    try {
+      const resp = await fetch("/api/design", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, mode })
+      });
+      const data = await resp.json();
+      if(!resp.ok) throw new Error(data.error || "API error");
+
+      result.style.display = "block";
+      mmdRaw.textContent = data.mermaid;
+      try {
+        // 一意のIDを付けてレンダリング
+        const { svg, bindFunctions } = await mermaid.render(
+          "mmd-" + Date.now(),
+          data.mermaid
+        );
+        mmdView.innerHTML = svg;
+        if (bindFunctions) bindFunctions(mmdView);
+      } catch (err) {
+        console.error("Mermaid render error:", err);
+        // フォールバック：生テキストを表示
+        mmdView.textContent = data.mermaid;
+      }
+      statusEl.textContent = `Done (${data.mode})`;
+
+      const bits = [];
+      if (data.bicep) bits.push(`<details><summary>Bicep</summary><pre class="code">${esc(data.bicep)}</pre></details>`);
+      if (data.model) bits.push(`<details><summary>Model JSON</summary><pre class="code">${esc(JSON.stringify(data.model, null, 2))}</pre></details>`);
+      if (data.fallback) bits.push(`<div class="muted">⚠️ ${esc(data.fallback)}</div>`);
+      extras.innerHTML = bits.join("");
+    } catch(e){ statusEl.textContent = "Error: " + e.message; }
+    finally { runBtn.disabled = false; }
+  });
+</script>
+</body>
+</html>

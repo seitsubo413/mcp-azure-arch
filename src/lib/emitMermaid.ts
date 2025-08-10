@@ -2,11 +2,11 @@
 import type { Model, Resource } from "./types.js";
 
 export type MermaidOptions = {
-  legend?: boolean;                     // 凡例表示
-  subnetDetail?: "full" | "compact";    // サブネット詳細度
-  direction?: "TB" | "LR";              // 図の向き
-  showPeerings?: boolean;               // VNet間ピアリングの注記表示
-  showIdsInLabels?: boolean;            // ラベルにIDを含める
+  legend?: boolean;                     // 凡例を出す
+  subnetDetail?: "full" | "compact";    // サブネットを詳細表示するか
+  direction?: "TB" | "LR";              // 矢印の向き
+  showPeerings?: boolean;               // VNet ピアリング注記
+  showIdsInLabels?: boolean;            // ラベル末尾に [id] を出す
 };
 
 export function emitMermaid(m: Model, opts: MermaidOptions = {}): string {
@@ -20,68 +20,87 @@ export function emitMermaid(m: Model, opts: MermaidOptions = {}): string {
   push(`flowchart ${dir}`);
   push(`%% Region: ${m.region}`);
 
-  // Legend
+  // Legend（任意）
   if (legend) {
-    push(`
-subgraph legend["Legend"]
+    push(`subgraph legend["Legend"]
   direction LR
-  net["Network (VNet/Subnet)"]:::net
+  net["Network (VNet/Subnet/PIP/NSG/RouteTable/DNS)"]:::net
   sec["Security (Firewall/WAF/VPN/Bastion)"]:::sec
   appc["App (PaaS)"]:::appc
   data["Data (DB/Storage)"]:::data
   keyv["Key/Secrets"]:::keyv
-  pe["Private Endpoint / DNS"]:::pe
+  pe["Private Endpoint / Private DNS"]:::pe
 end`);
   }
 
-  // On-Prem 必要時のみ
-  const hasOnprem = m.edges.some(e => e.from === "onprem" || e.to === "onprem");
-  if (hasOnprem) {
-    push(`subgraph onp["On-Premises"]`);
-    push(`  onprem["On-Premises"]:::net`);
-    push(`end`);
+  // On-Prem（必要時のみ）
+  if (m.edges?.some(e => e.from === "onprem" || e.to === "onprem")) {
+    push(`subgraph onp["On-Premises"]
+  onprem["On-Premises"]:::net
+end`);
   }
 
   // Hub
-  push(`subgraph ${m.hub.id}["${titleVNet(m.hub.label ?? "Hub VNet", m.hub.cidr, showIds ? m.hub.id : undefined)}"]`);
-  if (subnetDetail === "full") {
-    for (const sn of m.hub.subnets) push(`  ${sn.id}["${titleSubnet(sn)}"]:::net`);
-  } else {
-    push(`  ${m.hub.subnets[0].id}["Subnets: ${m.hub.subnets.map(s=>s.cidr).join(", ")}"]:::net`);
-  }
-  push(`end`);
+  push(
+    `subgraph ${safeId(m.hub.id)}["${titleVNet(
+      m.hub.label ?? "Hub VNet",
+      m.hub.cidr,
+      showIds ? m.hub.id : undefined
+    )}"]`
+  );
+  emitSubnets(m.hub.subnets);
+  push("end");
 
   // Spokes
   for (const sp of m.spokes) {
-    push(`subgraph ${sp.id}["${titleVNet(sp.label ?? "Spoke", sp.cidr, showIds ? sp.id : undefined)}"]`);
-    if (subnetDetail === "full") {
-      for (const sn of sp.subnets) push(`  ${sn.id}["${titleSubnet(sn)}"]:::net`);
-    } else {
-      push(`  ${sp.subnets[0].id}["Subnets: ${sp.subnets.map(s=>s.cidr).join(", ")}"]:::net`);
-    }
-    push(`end`);
+    push(
+      `subgraph ${safeId(sp.id)}["${titleVNet(
+        sp.label ?? "Spoke",
+        sp.cidr,
+        showIds ? sp.id : undefined
+      )}"]`
+    );
+    emitSubnets(sp.subnets);
+    push("end");
   }
 
-  // Resources
-  for (const r of m.resources) push(resourceNode(r));
+  // Resources（ノード）
+  const resources = (m.resources ?? []) as Resource[];
+  for (const r of resources) {
+    push(resourceNode(r));
+  }
 
   // Edges（L3は破線、L7は太線）
   for (const e of m.edges) {
     const style = e.kind === "l3" ? "-.->" : "==>";
-    push(`  ${e.from} ${style} ${e.to}`);
+    const from = safeId(e.from);
+    const to = safeId(e.to);
+    if (!from || !to) continue;
+    push(`  ${from} ${style} ${to}`);
   }
 
-  // Peerings 注記（任意）
+  // Peerings（任意）
   if (showPeer && m.peerings?.length) {
+    // ざっくり補助線＆注記
     for (const p of m.peerings) {
+      const a = safeId(p.fromVnetId);
+      const b = safeId(p.toVnetId);
+      if (!a || !b) continue;
       const ann = [
         p.allowGatewayTransit ? "GT" : "",
         p.useRemoteGateways ? "RG" : "",
         p.allowForwardedTraffic ? "FWD" : "",
-      ].filter(Boolean).join("/");
-      if (ann) push(`  ${p.fromVnetId} --- ${p.toVnetId}:::peerNote`);
-      if (ann) push(`  linkStyle ${linkIndex(L)} stroke:#999,stroke-dasharray: 2 2;`);
-      if (ann) push(`  click ${p.fromVnetId} "Peering: ${p.fromVnetId}→${p.toVnetId} [${ann}]" _self`);
+        p.allowVnetAccess ?? true ? "" : "noAccess",
+      ]
+        .filter(Boolean)
+        .join("/");
+
+      push(`  ${a} --- ${b}:::peerNote`);
+      // Mermaid は線インデックスを厳密指定しにくいので CSS 的な装飾は控えめに
+      if (ann) {
+        // クリック注記（単なるラベルの代わり）
+        push(`  click ${a} "Peering: ${a}→${b} [${ann}]" _self`);
+      }
     }
   }
 
@@ -95,55 +114,143 @@ end`);
   push('classDef peerNote fill:#fff,stroke:#bbb,stroke-dasharray: 2 2;');
   push('classDef note fill:#fff,stroke:#bbb,stroke-dasharray: 3 3;');
 
-  // Notes
-  m.notes.forEach((n, i) => {
+  // Notes（KeyVaultに紐付けるのはやめて、フローティングの注記に）
+  m.notes?.forEach((n, i) => {
     const nid = `note${i + 1}`;
     push(`  ${nid}["${escape(n)}"]:::note`);
-    if (i === 0 && m.resources.some(x => x.type === "KeyVault")) push(`  kv --- ${nid}`);
   });
 
   return L.join("\n");
 
-  // --- helpers ---
-  function push(s: string) { L.push(s); }
-  function escape(s: string) { return s.replace(/"/g, '\\"'); }
+  // ===== helpers =====
+
+  function push(s: string) {
+    L.push(s);
+  }
+
+  function escape(s: string) {
+    return String(s).replace(/"/g, '\\"');
+  }
+
+  function safeId(s?: string) {
+    if (!s) return "";
+    return s.replace(/[^\w]/g, "_");
+  }
+
   function titleVNet(label: string, cidr: string, id?: string) {
     return `${label} (${cidr})${id ? ` [${id}]` : ""}`;
   }
-  function titleSubnet(sn: { purpose: string; cidr: string }) {
-    const name = sn.purpose[0].toUpperCase() + sn.purpose.slice(1);
-    return `${name} Subnet (${sn.cidr})`;
+
+  function titleSubnet(sn: { purpose?: string; cidr: string; id?: string }) {
+    const name =
+      (sn.purpose
+        ? sn.purpose[0].toUpperCase() + sn.purpose.slice(1)
+        : (sn.id ?? "Subnet")) + " Subnet";
+    return `${name} (${sn.cidr})`;
   }
-  function linkIndex(lines: string[]) {
-    // 最後に追加した線を狙うための雑な index（Mermaid仕様上 厳密制御は難しいので控えめに）
-    return Math.max(0, lines.filter(x => x.includes('---') || x.includes('-->') || x.includes('==>') || x.includes('-.->')).length - 1);
+
+  function emitSubnets(subnets: any[]) {
+    if (!subnets?.length) return;
+    if (subnetDetail === "full") {
+      for (const sn of subnets) {
+        push(`  ${safeId(sn.id)}["${titleSubnet(sn)}"]:::net`);
+      }
+    } else {
+      // CIDR をまとめて1行で
+      const first = safeId(subnets[0].id || "sn0");
+      const list = subnets.map((s) => s.cidr).join(", ");
+      push(`  ${first}["Subnets: ${list}"]:::net`);
+    }
   }
-  function resourceNode(r: Resource): string {
-    const label = r.label ?? r.type;
-    const base = (clazz: string) => `  ${r.id}["${escape(label)}"]:::${clazz}`;
+
+  function labelOf(r: Resource) {
+    // それぞれのタイプでラベルを豊かにする
     switch (r.type) {
+      case "AppService": {
+        const sku = (r as any).sku ? ` ${(r as any).sku}` : "";
+        const inst =
+          typeof (r as any).instances === "number"
+            ? ` x${(r as any).instances}`
+            : "";
+        return `App Service${sku}${inst}`;
+      }
+      case "AppGateway": {
+        const waf = (r as any).waf ? " (WAF_v2)" : "";
+        return `App Gateway${waf}`;
+      }
       case "AzureFirewall":
+        return "Azure Firewall";
+      case "VpnGateway":
+        return "VPN Gateway";
+      case "ExpressRouteGateway":
+        return "ExpressRoute Gateway";
+      case "Bastion":
+        return "Azure Bastion";
+      case "SqlDb": {
+        const tier = (r as any).tier ? ` ${(r as any).tier}` : "";
+        const zr = (r as any).zoneRedundant ? " ZR" : "";
+        return `Azure SQL DB${tier}${zr}`;
+      }
+      case "Storage": {
+        const red = (r as any).redundancy ? ` ${(r as any).redundancy}` : "";
+        return `Storage${red}`;
+      }
+      case "KeyVault":
+        return "Key Vault";
+      case "PrivateEndpoint": {
+        const t = (r as any).targetResourceType ?? "";
+        return `Private Endpoint → ${t}`;
+      }
+      case "PrivateDnsZone": {
+        const z = (r as any).zoneName ?? "Private DNS";
+        return `Private DNS: ${z}`;
+      }
+      case "NetworkSecurityGroup":
+        return r.label || "NSG";
+      case "RouteTable":
+        return r.label || "Route Table";
+      case "PublicIP":
+        return r.label || "Public IP";
+      default: {
+        // When the union is fully covered, TS narrows `r` to `never` in `default`.
+        // Use `any` to safely fall back.
+        const anyR = r as any;
+        return anyR?.label ?? String(anyR?.type ?? "Resource");
+      }
+    }
+  }
+
+  function classOf(r: Resource) {
+    switch (r.type) {
       case "AppGateway":
+      case "AzureFirewall":
       case "VpnGateway":
       case "ExpressRouteGateway":
       case "Bastion":
-        return base("sec");
+        return "sec";
       case "AppService":
-        return base("appc");
+        return "appc";
       case "SqlDb":
       case "Storage":
-        return base("data");
+        return "data";
       case "KeyVault":
-        return base("keyv");
+        return "keyv";
       case "PrivateEndpoint":
       case "PrivateDnsZone":
-        return base("pe");
+        return "pe";
       case "NetworkSecurityGroup":
       case "RouteTable":
       case "PublicIP":
-        return base("net");
+        return "net";
       default:
-        return base("appc");
+        return "appc";
     }
+  }
+
+  function resourceNode(r: Resource): string {
+    const id = safeId(r.id);
+    const label = labelOf(r);
+    const clazz = classOf(r);
+    return `  ${id}["${escape(label)}"]:::${clazz}`;
   }
 }
