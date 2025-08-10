@@ -1,0 +1,34 @@
+flowchart TB
+%% Region: japaneast
+subgraph hub["Hub VNet (10.0.0.0/16)"]
+  hub-infra["Subnets: 10.0.0.0/24, 10.0.0.32/27, 10.0.1.0/26, 10.0.1.64/26"]:::net
+end
+subgraph spoke-web["Spoke-Web (10.1.0.0/16)"]
+  sn_pub["Subnets: 10.1.0.0/24, 10.1.1.0/24, 10.1.2.0/24, 10.1.3.0/24"]:::net
+end
+  appsvc["App Service"]:::appc
+  sqldb["Azure SQL DB"]:::data
+  st["Storage"]:::data
+  kv["Key Vault"]:::keyv
+  nsg-app["NSG (App)"]:::net
+  appsvc ==> sqldb
+  appsvc ==> st
+  sqldb ==> kv
+  st ==> kv
+  hub --- spoke-web:::peerNote
+  linkStyle 4 stroke:#999,stroke-dasharray: 2 2;
+  click hub "Peering: hub→spoke-web [GT/FWD]" _self
+  spoke-web --- hub:::peerNote
+  linkStyle 5 stroke:#999,stroke-dasharray: 2 2;
+  click spoke-web "Peering: spoke-web→hub [RG/FWD]" _self
+classDef net fill:#E6F4F1,stroke:#7FB3AE;
+classDef sec fill:#FCE5E1,stroke:#E39A8A;
+classDef appc fill:#EAE7FF,stroke:#A79BEA;
+classDef data fill:#FFF3C4,stroke:#E2C35A;
+classDef keyv fill:#F2F2F2,stroke:#BBBBBB;
+classDef pe fill:#E7F0FF,stroke:#89A6E8;
+classDef peerNote fill:#fff,stroke:#bbb,stroke-dasharray: 2 2;
+classDef note fill:#fff,stroke:#bbb,stroke-dasharray: 3 3;
+  note1["Region: japaneast"]:::note
+  kv --- note1
+  note2["Private Endpoint はそれぞれ Private DNS 構成が必要（ゾーンリンク注意）。"]:::note

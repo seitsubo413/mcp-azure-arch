@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Azure Architecture Preview</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<style>body{font:14px/1.5 system-ui;margin:24px;max-width:1000px}pre{background:#f8f8f8;padding:12px;border-radius:8px;overflow:auto}</style>
+</head>
+<body>
+<h1>Azure Architecture Preview</h1>
+<pre>flowchart TB
+%% Region: japaneast
+subgraph hub[&quot;Hub VNet (10.0.0.0/16)&quot;]
+  hub-infra[&quot;Subnets: 10.0.0.0/24, 10.0.0.32/27, 10.0.1.0/26, 10.0.1.64/26&quot;]:::net
+end
+subgraph spoke-web[&quot;Spoke-Web (10.1.0.0/16)&quot;]
+  sn_pub[&quot;Subnets: 10.1.0.0/24, 10.1.1.0/24, 10.1.2.0/24, 10.1.3.0/24&quot;]:::net
+end
+  appsvc[&quot;App Service&quot;]:::appc
+  sqldb[&quot;Azure SQL DB&quot;]:::data
+  st[&quot;Storage&quot;]:::data
+  kv[&quot;Key Vault&quot;]:::keyv
+  nsg-app[&quot;NSG (App)&quot;]:::net
+  appsvc ==&gt; sqldb
+  appsvc ==&gt; st
+  sqldb ==&gt; kv
+  st ==&gt; kv
+  hub --- spoke-web:::peerNote
+  linkStyle 4 stroke:#999,stroke-dasharray: 2 2;
+  click hub &quot;Peering: hub→spoke-web [GT/FWD]&quot; _self
+  spoke-web --- hub:::peerNote
+  linkStyle 5 stroke:#999,stroke-dasharray: 2 2;
+  click spoke-web &quot;Peering: spoke-web→hub [RG/FWD]&quot; _self
+classDef net fill:#E6F4F1,stroke:#7FB3AE;
+classDef sec fill:#FCE5E1,stroke:#E39A8A;
+classDef appc fill:#EAE7FF,stroke:#A79BEA;
+classDef data fill:#FFF3C4,stroke:#E2C35A;
+classDef keyv fill:#F2F2F2,stroke:#BBBBBB;
+classDef pe fill:#E7F0FF,stroke:#89A6E8;
+classDef peerNote fill:#fff,stroke:#bbb,stroke-dasharray: 2 2;
+classDef note fill:#fff,stroke:#bbb,stroke-dasharray: 3 3;
+  note1[&quot;Region: japaneast&quot;]:::note
+  kv --- note1
+  note2[&quot;Private Endpoint はそれぞれ Private DNS 構成が必要（ゾーンリンク注意）。&quot;]:::note</pre>
+<div id="d" class="mermaid">flowchart TB
+%% Region: japaneast
+subgraph hub[&quot;Hub VNet (10.0.0.0/16)&quot;]
+  hub-infra[&quot;Subnets: 10.0.0.0/24, 10.0.0.32/27, 10.0.1.0/26, 10.0.1.64/26&quot;]:::net
+end
+subgraph spoke-web[&quot;Spoke-Web (10.1.0.0/16)&quot;]
+  sn_pub[&quot;Subnets: 10.1.0.0/24, 10.1.1.0/24, 10.1.2.0/24, 10.1.3.0/24&quot;]:::net
+end
+  appsvc[&quot;App Service&quot;]:::appc
+  sqldb[&quot;Azure SQL DB&quot;]:::data
+  st[&quot;Storage&quot;]:::data
+  kv[&quot;Key Vault&quot;]:::keyv
+  nsg-app[&quot;NSG (App)&quot;]:::net
+  appsvc ==&gt; sqldb
+  appsvc ==&gt; st
+  sqldb ==&gt; kv
+  st ==&gt; kv
+  hub --- spoke-web:::peerNote
+  linkStyle 4 stroke:#999,stroke-dasharray: 2 2;
+  click hub &quot;Peering: hub→spoke-web [GT/FWD]&quot; _self
+  spoke-web --- hub:::peerNote
+  linkStyle 5 stroke:#999,stroke-dasharray: 2 2;
+  click spoke-web &quot;Peering: spoke-web→hub [RG/FWD]&quot; _self
+classDef net fill:#E6F4F1,stroke:#7FB3AE;
+classDef sec fill:#FCE5E1,stroke:#E39A8A;
+classDef appc fill:#EAE7FF,stroke:#A79BEA;
+classDef data fill:#FFF3C4,stroke:#E2C35A;
+classDef keyv fill:#F2F2F2,stroke:#BBBBBB;
+classDef pe fill:#E7F0FF,stroke:#89A6E8;
+classDef peerNote fill:#fff,stroke:#bbb,stroke-dasharray: 2 2;
+classDef note fill:#fff,stroke:#bbb,stroke-dasharray: 3 3;
+  note1[&quot;Region: japaneast&quot;]:::note
+  kv --- note1
+  note2[&quot;Private Endpoint はそれぞれ Private DNS 構成が必要（ゾーンリンク注意）。&quot;]:::note</div>
+<script>mermaid.initialize({ startOnLoad: true });</script>
+</body>
+</html>

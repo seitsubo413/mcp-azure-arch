@@ -1,0 +1,27 @@
+{
+  "name": "mcp-azure-arch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "client": "tsx src/clientCli.ts",
+    "client:docs": "tsx src/clientCli.ts --docs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "openai": "^5.12.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.5.0",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4"
+  }
+}
