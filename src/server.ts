@@ -49,15 +49,18 @@ server.registerTool(
     
     // ↓ ここで不足補完・重複除去などの正規化
     model = normalizeModel(model, {
+      preferredRegion: flags.region,
       enforceWaf: flags.waf,
       enforceVpn: flags.vpn,
-      enforceFirewall: flags.firewall, 
-      enforceBastion: flags.bastion, 
+      enforceFirewall: flags.firewall,
+      enforceBastion: flags.bastion,
       enforcePE: {
         sql: flags.privateEndpointSql,
         storage: flags.privateEndpointStorage,
         kv: flags.privateEndpointKeyVault,
       },
+      drRegion: flags.drRegion,             // 例: "japanwest"
+      trafficManager: flags.trafficManager, // true/false
     });
     
     // 最終的にMermaid化
@@ -95,6 +98,7 @@ server.registerTool(
       const f = parsePrompt(prompt); // ← 追加
     
       const model = normalizeModel(modelRaw, {
+        preferredRegion: f.region,        // ← ここ重要。east/west で切り替えたい時に使う
         enforceWaf: f.waf,
         enforceVpn: f.vpn,
         enforceFirewall: f.firewall,
@@ -104,6 +108,8 @@ server.registerTool(
           storage: f.privateEndpointStorage,
           kv: f.privateEndpointKeyVault,
         },
+        drRegion: f.drRegion,             // ← 追加：例 "japanwest"
+        trafficManager: f.trafficManager, // ← 追加：TMでフェイルオーバー有効
       });
     
       const mermaid = emitMermaid(model);

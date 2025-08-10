@@ -88,13 +88,58 @@ export function normalizeModel(
     preferredRegion?: string;
     enforceWaf?: boolean;
     enforceVpn?: boolean;
-    enforceFirewall?: boolean; 
-    enforceBastion?: boolean;  
+    enforceFirewall?: boolean;
+    enforceBastion?: boolean;
     enforcePE?: { sql?: boolean; storage?: boolean; kv?: boolean };
+    // --- DR / multi-region (Option A: approximate) ---
+    drRegion?: string;           // e.g. "japanwest"
+    trafficManager?: boolean;    // add TM and wire to both regions
   }
 ): Model {
     const ensureId = ensureIdFactory();
-  
+
+// naive /16 CIDR bump helper: "A.B.0.0/16" -> "A.(B+add).0.0/16"
+function bumpCidr16(cidr: string, add = 1): string {
+  const m = cidr.match(/^(\d+)\.(\d+)\.\d+\.\d+\/16$/);
+  if (!m) return cidr;
+  const a = Number(m[1]), b = Math.min(254, Number(m[2]) + add);
+  return `${a}.${b}.0.0/16`;
+}
+
+function cloneSubnets(subnets: any[], suffix: string) {
+    return (subnets || []).map((sn: any) => ({
+      ...sn,
+      id: `${sn.id || 'sn'}${suffix}`,
+      cidr: sn.cidr?.includes('/24')
+        ? sn.cidr.replace(
+            /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/24$/,
+            (_: string, $1: string, $2: string, $3: string) =>
+              `${$1}.${Math.min(254, Number($2) + 1)}.${$3}.0/24`
+          )
+        : sn.cidr
+    }));
+  }
+
+function cloneVnet(v: any, suffix: string, bump = 1) {
+  return {
+    ...v,
+    id: `${v.id}${suffix}`,
+    label: (v.label ? `${v.label}` : v.kind === 'hub' ? 'Hub VNet' : 'Spoke') + ` ${suffix.replace('_','').toUpperCase()}`,
+    cidr: bumpCidr16(v.cidr, bump),
+    subnets: cloneSubnets(v.subnets, suffix),
+  };
+}
+
+function cloneResource(r: any, suffix: string, idMap: Record<string,string>) {
+  const copy = { ...r, id: `${r.id}${suffix}` };
+  if (copy.label) copy.label = `${copy.label} ${suffix.replace('_','').toUpperCase()}`;
+  // Private Endpoint: retarget to cloned resource if present
+  if (copy.type === 'PrivateEndpoint' && r.targetResourceId) {
+    copy.targetResourceId = idMap[r.targetResourceId] || r.targetResourceId;
+  }
+  return copy;
+}
+
   // --- region ---
   m.region = opts?.preferredRegion ?? m.region ?? "japaneast";
   
@@ -168,7 +213,7 @@ export function normalizeModel(
         subnetId: "sn_data"
       });
     };
-  
+
     if (opts?.enforcePE?.sql && !m.resources.some((r: any) => r.type === "PrivateEndpoint" && /sql/i.test(r.targetResourceType))) {
       ensurePE("pe_sql", "SqlDb");
     }
@@ -178,9 +223,64 @@ export function normalizeModel(
     if (opts?.enforcePE?.kv && !m.resources.some((r: any) => r.type === "PrivateEndpoint" && /key/i.test(r.targetResourceType))) {
       ensurePE("pe_kv", "KeyVault");
     }
+
+    // --- DR (Option A): approximate second region as cloned VNets/resources ---
+    if (opts?.drRegion) {
+      // annotate
+      m.notes ||= [];
+      m.notes.push(`DR across ${m.region} and ${opts.drRegion}.`);
+
+      // clone hub and first spoke as west set
+      const suffix = "_west";
+      const hubWest = cloneVnet(m.hub, suffix, 2);
+      const spokeWest = m.spokes[0] ? cloneVnet(m.spokes[0], suffix, 2) : undefined;
+
+      // append cloned spoke as additional VNet (approximation)
+      if (spokeWest) m.spokes.push(spokeWest);
+
+      // build ID map for resource retargeting
+      const idMap: Record<string,string> = {};
+
+      // resources to clone on spoke side (app/data/security/pe)
+      const typesToClone = new Set([
+        "AppGateway","AzureFirewall","AppService","SqlDb","Storage","KeyVault","PrivateEndpoint","NetworkSecurityGroup","RouteTable","PublicIP"
+      ]);
+
+      const clonedResources: any[] = [];
+      for (const r of m.resources) {
+        if (!typesToClone.has((r as any).type)) continue;
+        const newId = `${(r as any).id}${suffix}`;
+        idMap[(r as any).id] = newId;
+        clonedResources.push(cloneResource(r, suffix, idMap));
+      }
+      m.resources.push(...clonedResources);
+
+      // simple note to indicate west hub (rendered as additional VNet)
+      // keep original hub; hubWest is not appended to m.hub (schema has single hub)
+      // instead, we add a note so the diagram communicates dual hubs
+      m.notes.push(`(approx) Additional hub in ${opts.drRegion} (rendered as extra VNet).`);
+    }
+
+    // Traffic Manager: ensure and wire later
+    if (opts?.trafficManager && !m.resources.some((r:any) => r.type === 'TrafficManager')) {
+      m.resources.push({ type: 'TrafficManager', id: 'tm', label: 'Traffic Manager' } as any);
+    }
+
     // --- edges は LLM由来を捨てて自動配線に寄せる ---
     m.edges = [];
     autoWireEdges(m);
+
+    // Extra wiring for Traffic Manager → AGW (east & west)
+    if (opts?.trafficManager) {
+      const agwEast = (m.resources.find((r:any) => r.type === 'AppGateway' && !String(r.id).endsWith('_west')) as any)?.id;
+      const agwWest = (m.resources.find((r:any) => r.type === 'AppGateway' && String(r.id).endsWith('_west')) as any)?.id;
+      const addEdge = (from?: string, to?: string) => {
+        if (!from || !to) return;
+        if (!m.edges.some(e => e.from === from && e.to === to)) m.edges.push({ from, to, kind: 'l7' });
+      };
+      addEdge('tm', agwEast);
+      addEdge('tm', agwWest);
+    }
 
     // ここでインバリアント適用（不足サブネット・PDZ・UDR・PIP等の追補と警告）
     const res = enforceAzureInvariants(m, {
@@ -197,5 +297,8 @@ export function normalizeModel(
     m.notes ||= [];
     res.fixes.forEach(s => m.notes.push(`fix: ${s}`));
     res.warnings.forEach(s => m.notes.push(`warn: ${s}`));
+    if (opts?.drRegion) {
+      m.notes.push(`Traffic Manager entry configured for failover (if enabled).`);
+    }
     return m;
   }
