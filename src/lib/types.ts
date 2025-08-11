@@ -161,8 +161,18 @@ export type Edge = {
 // ===== 全体モデル =====
 export type Model = {
   region: string;
+  // --- New (multi-hub / aggregate) ---
+  /** 複数 Hub を許可。従来の `hub` があれば normalize 側で吸い上げる想定 */
+  hubs?: VNet[]; 
+  /** kind ベースで集約したい場合の全VNet配列（hub/spoke混在可）。任意 */
+  vnets?: VNet[];
+
+  // --- Backward compatibility ---
+  /** 既存テンプレの単一 Hub。将来的に非推奨予定だが当面は必須互換 */
   hub: VNet;
+  /** 既存テンプレの Spoke 群。将来的に `vnets` へ統合予定 */
   spokes: VNet[];
+
   // VNet間ピアリング（片方向ずつ定義）
   peerings?: Peering[];
   // 視覚化用

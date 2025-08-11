@@ -98,13 +98,89 @@ export function normalizeModel(
   // --- region ---
   m.region = opts?.preferredRegion ?? m.region ?? "japaneast";
   
-    // --- VNet/Subnet ---
-    m.hub.id = ensureId(m.hub.id);
-    m.hub.subnets?.forEach(sn => (sn.id = ensureId(sn.id)));
-    (m.spokes || []).forEach(v => {
+    // --- VNet/Subnet（複数Hub/後方互換）---
+    // 入力の可能性:
+    //  1) m.vnets に hub/spoke 混在
+    //  2) m.hubs / m.spokes に分離
+    //  3) 従来の m.hub + m.spokes
+    // を全て受け、最終的に m.vnets / m.hubs / m.spokes / m.hub を一貫させる。
+
+    const vnetIdMap = new Map<string, string>();
+    const subnetIdMap = new Map<string, string>();
+
+    // まず集約配列を作る
+    let allVnets = (m as any).vnets as any[] | undefined;
+    if (!allVnets || !allVnets.length) {
+      const hubs = (m as any).hubs as any[] | undefined;
+      const spokes = (m as any).spokes as any[] | undefined;
+      if ((hubs && hubs.length) || (spokes && spokes.length)) {
+        allVnets = [ ...(hubs || []), ...(spokes || []) ];
+      } else if (m.hub) {
+        allVnets = [ m.hub, ...(m.spokes || []) ];
+      } else {
+        allVnets = [];
+      }
+    }
+
+    // ID 採番（VNet / Subnet）とマップ作成
+    allVnets.forEach(v => {
+      const originalVnetId = v.id;
       v.id = ensureId(v.id);
-      v.subnets?.forEach(sn => (sn.id = ensureId(sn.id)));
+      if (originalVnetId && originalVnetId !== v.id) vnetIdMap.set(originalVnetId, v.id);
+
+      (v.subnets || []).forEach((sn: any) => {
+        const originalSnId = sn.id;
+        sn.id = ensureId(sn.id);
+        if (originalSnId && originalSnId !== sn.id) subnetIdMap.set(originalSnId, sn.id);
+      });
     });
+
+    // peerings の VNet ID を新しい ID に追随させる
+    if (m.peerings && m.peerings.length) {
+      m.peerings = m.peerings.map(p => ({
+        ...p,
+        fromVnetId: vnetIdMap.get(p.fromVnetId) || ensureId(p.fromVnetId),
+        toVnetId:   vnetIdMap.get(p.toVnetId)   || ensureId(p.toVnetId),
+      }));
+    }
+
+    // リソース中の subnetId を更新（PrivateEndpoint など）
+    (m.resources || []).forEach((r: any) => {
+      if (r && typeof r === 'object' && 'subnetId' in r && r.subnetId) {
+        r.subnetId = subnetIdMap.get(r.subnetId) || ensureId(r.subnetId);
+      }
+      // PrivateDnsZone の links.vnetId も更新
+      if (r && r.type === 'PrivateDnsZone' && Array.isArray(r.links)) {
+        r.links = r.links.map((lk: any) => ({
+          ...lk,
+          vnetId: vnetIdMap.get(lk.vnetId) || ensureId(lk.vnetId),
+        }));
+      }
+    });
+
+    // kind に基づいて hubs/spokes を再構成
+    const hubsArr = allVnets.filter(v => v.kind === 'hub');
+    const spokesArr = allVnets.filter(v => v.kind === 'spoke');
+
+    (m as any).vnets = allVnets; // 集約配列を保持
+    (m as any).hubs = hubsArr;   // 複数Hubを保持
+    m.spokes = spokesArr;        // 既存フィールドも更新
+
+    // 既存の単一 hub フィールドは先頭の hub で代表させる（後方互換）
+    if (hubsArr.length > 0) {
+      m.hub = hubsArr[0];
+    } else if (!m.hub) {
+      // 万一 hub が無い場合でも型上必須なのでダミーを用意
+      m.hub = {
+        id: ensureId('hub'),
+        label: 'Hub',
+        cidr: '10.0.0.0/16',
+        kind: 'hub',
+        subnets: [],
+      } as any;
+      (m as any).hubs = [m.hub];
+      (m as any).vnets = [m.hub, ...spokesArr];
+    }
   
     // --- Resources: 正規化（型名ゆれ吸収 & ID採番）---
     m.resources ||= [];
@@ -168,7 +244,7 @@ export function normalizeModel(
         subnetId: "sn_data"
       });
     };
-  
+
     if (opts?.enforcePE?.sql && !m.resources.some((r: any) => r.type === "PrivateEndpoint" && /sql/i.test(r.targetResourceType))) {
       ensurePE("pe_sql", "SqlDb");
     }

@@ -15,11 +15,13 @@ export function enforceAzureInvariants(m: Model, flags: {
   const warns: string[] = [];
   const fixes: string[] = [];
 
-  const hub = m.hub;
+  const hubs: VNet[] = ((m as any).hubs && (m as any).hubs.length ? (m as any).hubs : [m.hub]).filter(Boolean);
   const ensureSubnet = (name: string, cidr: string) => {
-    if (!hub.subnets.some(s => s.id === name)) {
-      hub.subnets.push({ id: name, cidr, purpose: inferPurpose(name) });
-      fixes.push(`added subnet ${name} in hub (${cidr})`);
+    for (const hb of hubs) {
+      if (!hb.subnets.some(s => s.id === name)) {
+        hb.subnets.push({ id: name, cidr, purpose: inferPurpose(name) });
+        fixes.push(`added subnet ${name} in hub ${hb.id} (${cidr})`);
+      }
     }
   };
   const inferPurpose = (id: string): "public" | "app" | "data" | "infra" => {
@@ -52,10 +54,14 @@ export function enforceAzureInvariants(m: Model, flags: {
 
   // WAF / App Gateway
   if (flags.waf) {
-    // Spoke側に AppGatewaySubnet を用意（テンプレと整合）
-    const spoke = m.spokes[0];
-    if (spoke && !spoke.subnets.some(s => s.id === "AppGatewaySubnet"))
-      spoke.subnets.push({ id: "AppGatewaySubnet", cidr: "10.1.3.0/24", purpose: "public" as any });
+    // 各 Spoke に AppGatewaySubnet を用意（CIDR は仮置き。必要に応じて見直し）
+    for (const sp of m.spokes || []) {
+      if (!sp.subnets.some(s => s.id === "AppGatewaySubnet")) {
+        sp.subnets.push({ id: "AppGatewaySubnet", cidr: "10.1.3.0/24", purpose: "public" as any });
+        fixes.push(`added AppGatewaySubnet in spoke ${sp.id} (10.1.3.0/24)`);
+        warns.push(`AppGatewaySubnet in ${sp.id} uses default CIDR (10.1.3.0/24) — review`);
+      }
+    }
     if (!has("AppGateway")) warns.push("WAF requested but AppGateway missing (auto-added)");
   }
 
@@ -80,19 +86,19 @@ export function enforceAzureInvariants(m: Model, flags: {
     warns.push("Private Endpoint uses require Private DNS zones and zone links to VNets.");
   }
 
-  // UDR（Firewallがあるなら app/data に既定ルート→FW）
+  // UDR（Firewallがあるなら各 Spoke の app/data に既定ルート→FW）
   if (flags.firewall) {
-    const spoke = m.spokes[0];
-    if (spoke) {
-      const rtId = "rt-spoke-default";
+    for (const sp of m.spokes || []) {
+      const rtId = `rt-${sp.id}-default`;
       if (!m.resources.some(r => (r as any).type === "RouteTable" && r.id === rtId)) {
         m.resources.push({
-          type: "RouteTable", id: rtId, label: "RT Spoke → FW",
+          type: "RouteTable", id: rtId, label: `RT ${sp.id} → FW`,
           routes: [{ name: "defaultToFW", addressPrefix: "0.0.0.0/0", nextHopType: "VirtualAppliance", nextHopIpAddress: "10.0.1.4" }]
         } as any);
-        fixes.push("added RouteTable for default route to Firewall");
+        fixes.push(`added RouteTable for ${sp.id} default route to Firewall`);
+        warns.push(`nextHopIpAddress for ${rtId} is default (10.0.1.4) — review`);
       }
-      spoke.subnets.forEach(sn => {
+      sp.subnets.forEach(sn => {
         if (sn.id === "sn_app" || sn.id === "sn_data") (sn as any).routeTableId = rtId;
       });
     }

@@ -1,5 +1,16 @@
 // src/lib/emitMermaid.ts
+
 import type { Model, Resource } from "./types.js";
+
+// shared escape for Mermaid labels (exported so other modules can import instead of using a global)
+export const esc = (s: string) =>
+  String(s ?? "")
+    .replace(/"/g, '\\"')
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/`/g, "\\`");
 
 export type MermaidOptions = {
   legend?: boolean;                     // 凡例を出す
@@ -40,29 +51,46 @@ end`);
 end`);
   }
 
-  // Hub
-  push(
-    `subgraph ${safeId(m.hub.id)}["${titleVNet(
-      m.hub.label ?? "Hub VNet",
-      m.hub.cidr,
-      showIds ? m.hub.id : undefined
-    )}"]`
-  );
-  emitSubnets(m.hub.subnets);
-  push("end");
+  // Hubs（複数対応・後方互換）
+  const hubs: any[] = (
+    (m as any).hubs && (m as any).hubs.length
+      ? (m as any).hubs
+      : (((m as any).vnets || []).filter((v: any) => v.kind === "hub"))
+  ) as any[];
+  if ((!hubs || hubs.length === 0) && (m as any).hub) {
+    hubs.push((m as any).hub);
+  }
+  for (const hv of hubs) {
+    push(
+      `subgraph ${safeId(hv.id)}["${titleVNet(
+        hv.label ?? "Hub VNet",
+        hv.cidr,
+        showIds ? hv.id : undefined
+      )}"]`
+    );
+    emitSubnets(hv.subnets);
+    push("end");
+  }
 
-  // Spokes
-  for (const sp of m.spokes) {
+  // Spokes（複数対応・後方互換）
+  const spokes: any[] = (
+    (m as any).spokes && (m as any).spokes.length
+      ? (m as any).spokes
+      : (((m as any).vnets || []).filter((v: any) => v.kind === "spoke"))
+  ) as any[];
+  spokes.forEach((sp, i) => {
+    const base = sp.label ?? "Spoke";
+    const friendly = /^spoke$/i.test(base) ? `Spoke${i + 1} VNet` : base;
     push(
       `subgraph ${safeId(sp.id)}["${titleVNet(
-        sp.label ?? "Spoke",
+        friendly,
         sp.cidr,
         showIds ? sp.id : undefined
       )}"]`
     );
     emitSubnets(sp.subnets);
     push("end");
-  }
+  });
 
   // Resources（ノード）
   const resources = (m.resources ?? []) as Resource[];
@@ -117,7 +145,7 @@ end`);
   // Notes（KeyVaultに紐付けるのはやめて、フローティングの注記に）
   m.notes?.forEach((n, i) => {
     const nid = `note${i + 1}`;
-    push(`  ${nid}["${escape(n)}"]:::note`);
+    push(`  ${nid}["${esc(n)}"]:::note`);
   });
 
   return L.join("\n");
@@ -128,9 +156,6 @@ end`);
     L.push(s);
   }
 
-  function escape(s: string) {
-    return String(s).replace(/"/g, '\\"');
-  }
 
   function safeId(s?: string) {
     if (!s) return "";
@@ -251,6 +276,6 @@ end`);
     const id = safeId(r.id);
     const label = labelOf(r);
     const clazz = classOf(r);
-    return `  ${id}["${escape(label)}"]:::${clazz}`;
+    return `  ${id}["${esc(label)}"]:::${clazz}`;
   }
 }
